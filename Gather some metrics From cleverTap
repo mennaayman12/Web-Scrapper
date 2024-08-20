@@ -1,0 +1,188 @@
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
+from csv import writer
+import traceback
+import time
+
+# Path to the ChromeDriver executable
+s = Service(r'path_to_your_chromedriver')
+
+# List of URLs to scrape (replace with generic examples if necessary)
+links = [
+    'https://example.com/page1',
+    'https://example.com/page2',
+]
+
+# Chrome options setup
+options = webdriver.ChromeOptions()
+options.add_argument('--profile-directory=Profile X')  # Use a generic profile if needed
+options.add_argument("--user-data-dir=path_to_your_chrome_user_data")
+driver = webdriver.Chrome(service=s, options=options)
+
+def extract_conversion_data(driver):
+    try:
+        pagesource = driver.page_source
+        soup = BeautifulSoup(pagesource, 'html.parser')
+
+        dataContainer = soup.find_all('div', {'class': ['stats-card-stats-container']})
+
+        if len(dataContainer) < 5:
+            print("Data container length is less than expected, skipping this URL.")
+            return None
+        
+        def extract_number_from_element(element):
+            return int(''.join(filter(str.isdigit, element.text))) if element else 0
+        
+        qualified_users = extract_number_from_element(soup.find('div', class_='qualified--count'))
+        sent = extract_number_from_element(dataContainer[0].find('span', {'class': ['stats-card-count']}))
+        views = extract_number_from_element(dataContainer[1].find('span', {'class': ['stats-card-secondary-count']}))
+        clicks = extract_number_from_element(dataContainer[2].find('span', {'class': ['stats-card-secondary-count']}))
+        cvr = extract_number_from_element(dataContainer[4].find('span', {'class': ['stats-card-secondary-count']}))
+        
+        errors = extract_number_from_element(soup.find('div', class_='substat errors').find('span', role='button')) if soup.find('div', class_='substat errors') else 0
+        cg_size = extract_number_from_element(soup.find('div', class_='substat control-group')) if soup.find('div', class_='substat control-group') else 0
+        cg_cvr = soup.find_all('span', {'class': ['conversion-performance-count']})[1].text if len(soup.find_all('span', {'class': ['conversion-performance-count']})) > 1 else 'N/A'
+        
+        through_data_container = soup.find('div', {'class': ['v-tooltip__content']})
+        numbers = [int(num.replace(',', '')) for num in through_data_container.text.split() if num.replace(',', '').isdigit()] if through_data_container else []
+
+        return [qualified_users, sent, views, clicks, cvr, numbers[0] if len(numbers) > 0 else 'N/A', numbers[1] if len(numbers) > 1 else 'N/A', errors, cg_size, cg_cvr]
+
+    except Exception as e:
+        print(f"Error extracting conversion data: {e}")
+        traceback.print_exc()
+        return None
+
+def handle_conversion_event(wait, event_name, filter_event=False):
+    try:
+        print(f"Starting to handle event '{event_name}'")
+        
+        conversion_event_edit_xpath = "//div[@class='conversion-event-inner']//i[contains(@class, 'cticon-edit')]"
+        conversion_event_edit = wait.until(EC.element_to_be_clickable((By.XPATH, conversion_event_edit_xpath)))
+        conversion_event_edit.click()
+        print(f"Clicked on the edit button for event '{event_name}'")
+        
+        dropdown_xpath = "//div[@class='dropdown-input event-names']"
+        dropdown = wait.until(EC.element_to_be_clickable((By.XPATH, dropdown_xpath)))
+        dropdown.click()
+        print("Clicked on the event names dropdown")
+        
+        search_box_js = "document.querySelector('#campaigns > div.v-menu__content.theme--light.v-menu__content--fixed.menuable__content__active.dropdown-menu > div.search-box.t-14.search-div > input')"
+        search_box = driver.execute_script("return " + search_box_js)
+        
+        driver.execute_script("arguments[0].value = '';", search_box)
+        driver.execute_script("arguments[0].value = arguments[1];", search_box, event_name)
+        driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", search_box)
+        driver.execute_script("arguments[0].dispatchEvent(new Event('change', { bubbles: true }));", search_box)
+        print(f"Searched for event '{event_name}'")
+        
+        time.sleep(2)
+        
+        event_xpath = f"//div[@role='listitem']//span[text()='{event_name}']"
+        event_element = wait.until(EC.element_to_be_clickable((By.XPATH, event_xpath)))
+        event_element.click()
+        print(f"Selected event '{event_name}'")
+        
+        if filter_event:
+            filter_button_xpath = "//span[text()='Filter']"
+            filter_button = wait.until(EC.element_to_be_clickable((By.XPATH, filter_button_xpath)))
+            filter_button.click()
+            print("Clicked on the 'Filter' button")
+            
+            event_property_xpath = "//span[@class='text-wrapper display-value-wrapper' and contains(text(), 'Event Property')]"
+            event_property = wait.until(EC.element_to_be_clickable((By.XPATH, event_property_xpath)))
+            event_property.click()
+            print("Clicked on 'Event Property'")
+            
+            search_input_js = "document.querySelector('#campaigns > div.v-menu__content.theme--light.v-menu__content--fixed.menuable__content__active.dropdown-menu > div.search-box.t-14.search-div > input')"
+            search_input = driver.execute_script("return " + search_input_js)
+            
+            driver.execute_script("arguments[0].value = '';", search_input)
+            driver.execute_script("arguments[0].value = 'First Time';", search_input)
+            driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", search_input)
+            driver.execute_script("arguments[0].dispatchEvent(new Event('change', { bubbles: true }));", search_input)
+            print("Searched for 'First Time'")
+            
+            first_time_xpath = "//div[@class='v-list-item__content']//span[text()='First Time']"
+            first_time = wait.until(EC.element_to_be_clickable((By.XPATH, first_time_xpath)))
+            first_time.click()
+            print("Selected 'First Time'")
+        
+        save_button_xpath = "//span[contains(text(), 'Save')]/parent::button"
+        save_button = wait.until(EC.element_to_be_clickable((By.XPATH, save_button_xpath)))
+        save_button.click()
+        print("Clicked on the Save button")
+        
+        time.sleep(15)
+        except Exception as e:
+        print(f"Error handling conversion event '{event_name}': {e}")
+        traceback.print_exc()
+
+def handle_url(url, writer):
+    driver.get(url)
+    wait = WebDriverWait(driver, 50)
+    
+    # Handle login if required (generic handling without exposing sensitive data)
+    if url == links[0]:
+        try:
+            email_field = wait.until(EC.presence_of_element_located((By.ID, "username")))
+            if email_field:
+                button = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@type='submit' and @data-provider='google']")))
+                button.click()
+                driver.get(url)
+        except Exception as e:
+            print(f"Error during login: {e}")
+            return
+    
+    # Updated order of conversion events
+    conversion_events = [
+        ("Purchased_hyperpay", False),
+        ("Purchased_sadad", False),
+        ("App Uninstalled", False),
+        ("Purchased_hyperpay", True),
+        ("Signup", False)
+    ]
+    
+    event_names = ["hyperpay", "sadad", "uninstall", "New Customer", "signup"]
+
+    event_data_dict = {name: None for name in event_names}
+    common_data = None
+
+    for i, (event_name, filter_event) in enumerate(conversion_events):
+        handle_conversion_event(wait, event_name, filter_event)
+        event_data = extract_conversion_data(driver)
+        if event_data:
+            print(f"Data extracted after handling '{event_name}' is: {event_data}")
+            if common_data is None:
+                common_data = event_data[:4] + event_data[5:]
+            event_data_dict[event_names[i]] = event_data[4]
+    
+    if common_data:
+        row = [url] + common_data
+        for event_name in event_names:
+            row.append(event_data_dict[event_name])
+        writer.writerow(row)
+
+finished_flag = False
+with open('Raha_CleverTap_PNn.csv', 'w', encoding='utf8', newline='') as w:
+    try:
+        thewriter = writer(w)
+        header = ['URL', 'Qualified Users', 'Sent', 'Views', 'Clicks', 'ViewThrough Conversion', 'ClickThrough Conversion', 'Errors', 'CG Size', 'CG CVR', 'CVR_hyperpay', 'CVR_sadad', 'CVR_uninstall', 'CVR_New Customer', 'CVR_signup']
+        thewriter.writerow(header)
+
+        for url in links:
+            handle_url(url, thewriter)
+    
+    except Exception as e:
+        print(e)
+        traceback.print_exc()
+        print("!!!!!!!!!!!!!!!!-Didn't finish all URLs, a check is needed-!!!!!!!!!!!!!!!!")
+        finished_flag = True
+
+if not finished_flag:
+    print("------------------------^DONE^-------------------------")
+
